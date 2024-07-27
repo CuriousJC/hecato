@@ -4,7 +4,13 @@ import (
 	"fmt"
 )
 
+var (
+	Version   = "dev"
+	BuildTime = "unknown"
+	Commit    = "none"
+)
+
+// Print prints the version information.
 func Print() {
-	//TODO: print a version instead
-	fmt.Println("hello world from hecato! Eventually I'll print a version here...")
+	fmt.Printf("Version: %s\nBuild Time: %s\nCommit: %s\n", Version, BuildTime, Commit)
 }

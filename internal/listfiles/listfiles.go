@@ -5,12 +5,19 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 )
 
-func GetLargeFiles(root string) ([]File, error) {
+func GetLargeFiles(target string, hits string) ([]File, error) {
 	var files []File
 
-	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+	// Convert hits from string to int
+	hitsInt, err := strconv.Atoi(hits)
+	if err != nil {
+		return nil, fmt.Errorf("invalid value for hits: %v", err)
+	}
+
+	err = filepath.Walk(target, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			fmt.Println("Error encountered but continuing...\n", err)
 		}
@@ -22,20 +29,19 @@ func GetLargeFiles(root string) ([]File, error) {
 		}
 		return nil
 	})
-
 	if err != nil {
+		//TODO: check for an Access is denied and throw that into a "couldn't read" files slice, otherwise...
 		return nil, err
 	}
 
 	sortFilesBySize(files)
 
-	// Limit the result to the first 10 files
-	topN := 10
-	if len(files) < topN {
-		topN = len(files)
+	//handle if there are fewer files than desired hits
+	if len(files) < hitsInt {
+		hitsInt = len(files)
 	}
 
-	return files[:topN], nil
+	return files[:hitsInt], nil
 }
 
 // Sort files by size in descending order
