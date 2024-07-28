@@ -8,21 +8,26 @@ import (
 	"strconv"
 )
 
-func GetLargeFiles(target string, hits string) ([]File, error) {
-	var files []File
+func GetLargeFiles(target string, hits string) (foundFiles []File, errorFiles []File, err error) {
 
 	// Convert hits from string to int
 	hitsInt, err := strconv.Atoi(hits)
 	if err != nil {
-		return nil, fmt.Errorf("invalid value for hits: %v", err)
+		return nil, nil, fmt.Errorf("invalid value for hits: %v", err)
 	}
 
 	err = filepath.Walk(target, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			fmt.Println("Error encountered but continuing...\n", err)
+			if os.IsPermission(err) {
+				errorFiles = append(errorFiles, File{
+					Path: path,
+				})
+				return nil
+			}
+			return err
 		}
 		if !info.IsDir() {
-			files = append(files, File{
+			foundFiles = append(foundFiles, File{
 				Path: path,
 				Size: info.Size(),
 			})
@@ -30,18 +35,17 @@ func GetLargeFiles(target string, hits string) ([]File, error) {
 		return nil
 	})
 	if err != nil {
-		//TODO: check for an Access is denied and throw that into a "couldn't read" files slice, otherwise...
-		return nil, err
+		return nil, nil, err
 	}
 
-	sortFilesBySize(files)
+	sortFilesBySize(foundFiles)
 
 	//handle if there are fewer files than desired hits
-	if len(files) < hitsInt {
-		hitsInt = len(files)
+	if len(foundFiles) < hitsInt {
+		hitsInt = len(foundFiles)
 	}
 
-	return files[:hitsInt], nil
+	return foundFiles[:hitsInt], errorFiles, nil
 }
 
 // Sort files by size in descending order
