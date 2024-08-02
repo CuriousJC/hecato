@@ -16,7 +16,7 @@ build-windows:
 
 # Clean the build output
 clean:
-	rm -f $(BINARY_NAME)
+	rm -f $(BINARY_NAME) $(BINARY_NAME).exe
 
 # Run tests
 test:
