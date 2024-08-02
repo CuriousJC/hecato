@@ -9,7 +9,7 @@ all: build-linux build-windows
 
 # Build the project
 build-linux:
-	GOOS=linux GOARCH=amd64 go build -o $(BINARY_NAME) $(SOURCE_PATH)
+	GOOS=linux GOARCH=amd64 go build -o $(BINARY_NAME) $(MAIN_PATH)
 
 build-windows:
 	GOOS=windows GOARCH=amd64 go build -o $(BINARY_NAME).exe $(MAIN_PATH)
