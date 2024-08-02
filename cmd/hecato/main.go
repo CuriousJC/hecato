@@ -6,6 +6,10 @@ go run c:/repos/hecato/cmd/hecato/main.go
 go build -o hecato.exe c:/repos/hecato/cmd/hecato/main.go
 c:/repos/hecato/hecato.exe
 
+git tag v1.0.0
+git push origin v1.0.0
+
+
 */
 
 package main
