@@ -2,7 +2,7 @@
 
 # Define the output binary name
 BINARY_NAME=hecato
-MAIN_PATH=cmd/hecato
+MAIN_PATH=cmd/hecato/main.go
 
 # Default target executed when no arguments are given to 'make'
 all: build
