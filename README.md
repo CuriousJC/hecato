@@ -7,3 +7,8 @@ hecato - Short for [Hecatoncheires](https://en.wikipedia.org/wiki/Hecatoncheires
 ```bash
 hecato -examples
 ```
+
+## Credit
+
+Hecato CLI by CuriousJC
+![CuriousJC Image](/static/curiousjc.jpg)

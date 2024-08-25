@@ -2,11 +2,14 @@ package listfiles
 
 import (
 	"fmt"
+	"time"
 )
 
 type File struct {
-	Path string
-	Size int64
+	Path        string
+	Size        int64
+	CreatedDate time.Time
+	ChangedDate time.Time
 }
 
 // SizeInMB returns the size of the file in megabytes.
