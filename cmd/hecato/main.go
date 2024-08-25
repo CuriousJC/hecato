@@ -19,8 +19,7 @@ TODO: new method: last changed files (changedfiles)
 TODO: new method: last created files (createdfiles)
 TODO: new method: file contents search (searchfile)
 TODO: new method: directory size summary (largedirs)
-TODO: flag: verbose flag
-TODO: flag: log file output
+TODO: update logging method to toggle between stdout and log file output
 TODO: functionality: Throw out OS files like page files and things like that on demand, or maybe an input file to ignore certain things
 
 
@@ -31,6 +30,9 @@ package main
 import (
 	"flag"
 	"fmt"
+	"log"
+	"os"
+	"path/filepath"
 	"strconv"
 
 	"github.com/curiousjc/hecato/internal/examples"
@@ -47,21 +49,32 @@ var (
 	exampleFlag *bool
 	eFlag       *bool
 	versionFlag *bool
-	vFlag       *bool
+	logFlag     *bool
 )
+
+var buildContext string = "development"
 
 func main() {
 	fmt.Println("-----------------Running Hecato-------------")
 
+	logFile, err := logSetup()
+	if err != nil {
+		log.Fatalf("failed to setup logger: %v", err)
+	}
+	defer logFile.Close() // Ensure the log file is closed when main exits
+
 	initFlags()
 	printFlags()
+
 	doWork()
+
+	log.Println("Work completed.")
 
 }
 
 func doWork() {
 
-	fmt.Println("---- Doing Work ------")
+	fmt.Printf("---- Doing Work.  Method: %s ------\n", *method)
 
 	switch *method {
 	case "version":
@@ -89,23 +102,19 @@ func doWork() {
 
 // initFlags defines our inputs and handles edge cases
 func initFlags() {
-	method = flag.String("method", "undefined", "Specify the method to run. Options: [largefiles, largedirs]")
-	m = flag.String("m", "undefined", "Specify the method to run short form")
-	target = flag.String("target", "undefined", "target of the given method")
-	hits = flag.String("hits", "15", "How many hits for given method")
-	hide = flag.Bool("hide", true, "Hide access errors from output")
-	exampleFlag = flag.Bool("examples", false, "Show examples of usage")
-	eFlag = flag.Bool("e", false, "Show examples of usage")
-	versionFlag = flag.Bool("version", false, "Show version")
-	vFlag = flag.Bool("v", false, "Show version")
+	method = flag.String("method", "undefined", "REQUIRED: Specify the method to run. Options: [largefiles, largedirs]")
+	m = flag.String("m", "undefined", "SHORTHAND for 'method'")
+	target = flag.String("target", "undefined", "REQUIRED: Target of the supplied method")
+	hits = flag.String("hits", "15", "OPTIONAL: How many hits for given method")
+	hide = flag.Bool("hide", true, "OPTIONAL: Hide access errors from output.  Defaults to True.  Access errors will be in default log.")
+	logFlag = flag.Bool("log", true, "OPTIONAL: Enables Log file app.log.  Defaults to True.  Overwrites on execution.  ")
+	exampleFlag = flag.Bool("examples", false, "OPTOINAL: Show examples of usage")
+	eFlag = flag.Bool("e", false, "SHORTHAND for 'examples'")
+	versionFlag = flag.Bool("version", false, "OPTIONAL: Show version")
 
 	flag.Parse()
 
-	//clobber our input method if there was example or version flag
-	if *versionFlag || *vFlag {
-		*method = "version"
-	}
-
+	//clobber our input method if examples were requested
 	if *exampleFlag || *eFlag {
 		*method = "examples"
 	}
@@ -134,6 +143,34 @@ func printFlags() {
 	fmt.Println("Examples Flag:", *exampleFlag)
 	fmt.Println("Short Examples Flag:", *eFlag)
 	fmt.Println("Version Flag:", *versionFlag)
-	fmt.Println("Short Version Flag:", *vFlag)
+	fmt.Println("Log Flag:", *logFlag)
 
+}
+
+func logSetup() (*os.File, error) {
+	logFilePath := ""
+	if buildContext == "development" {
+		logFilePath = filepath.Join("c:/repos/hecato", "app.log")
+	} else {
+		// Get the path to the executable directory
+		execDir, err := filepath.Abs(filepath.Dir(os.Args[0]))
+		if err != nil {
+			log.Fatalf("failed to get executable directory: %v", err)
+		}
+		// Create or open the log file in the executable directory
+		logFilePath = filepath.Join(execDir, "app.log")
+	}
+
+	println("Log Path ", logFilePath)
+	logFile, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open log file: %v", err)
+	}
+
+	// Configure the log package to use the log file
+	log.SetOutput(logFile)
+	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile) // Customize log format as needed
+	log.Println("Logger starting...")
+
+	return logFile, nil
 }
