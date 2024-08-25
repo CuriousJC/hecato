@@ -15,15 +15,12 @@ git tag v1.0.0
 git push origin v1.0.0
 git push origin main --tags
 
-TODO: move the log functions out to their own library from main
-
+TODO: polish: move the log functions out to their own library from main so things like the examples method can use it as well
+TODO: functionality: Throw out OS files like page files and things like that on demand, or maybe an input file to ignore certain things
 TODO: new method: last changed files (changedfiles)
 TODO: new method: last created files (createdfiles)
 TODO: new method: file contents search (searchfile)
 TODO: new method: directory size summary (largedirs)
-TODO: update logging method to toggle between stdout and log file output
-TODO: functionality: Throw out OS files like page files and things like that on demand, or maybe an input file to ignore certain things
-
 
 */
 
