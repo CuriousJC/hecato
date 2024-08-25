@@ -11,4 +11,4 @@ hecato -examples
 ## Credit
 
 Hecato CLI by CuriousJC
-![CuriousJC Image](/static/curiousjc.jpg)
+![CuriousJC Image](/static/CuriousJC.jpg)
