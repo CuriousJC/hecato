@@ -1,9 +1,6 @@
-package listfiles
+package files
 
 import (
-	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 )
@@ -13,27 +10,10 @@ func GetLargeFiles(target string, hits string) (foundFiles []File, errorFiles []
 	// Convert hits from string to int
 	hitsInt, err := strconv.Atoi(hits)
 	if err != nil {
-		return nil, nil, fmt.Errorf("invalid value for hits: %v", err)
+		return nil, nil, err
 	}
 
-	err = filepath.Walk(target, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			if os.IsPermission(err) {
-				errorFiles = append(errorFiles, File{
-					Path: path,
-				})
-				return nil
-			}
-			return err
-		}
-		if !info.IsDir() {
-			foundFiles = append(foundFiles, File{
-				Path: path,
-				Size: info.Size(),
-			})
-		}
-		return nil
-	})
+	foundFiles, errorFiles, err = getFiles(target)
 	if err != nil {
 		return nil, nil, err
 	}
