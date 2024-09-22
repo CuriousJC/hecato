@@ -20,10 +20,13 @@ git push origin v1.0.0
 git push origin main --tags
 
 //Stuff todo:::
+TODO: functionality: generate an "ignore" file that can be updated as needed to throw out results
 TODO: functionality: Throw out OS files like page files and things like that on demand, or maybe an input file to ignore certain things
 TODO: functionality: ignore whole directories if I want to
+TODO: functionality ignore the go directories specifically because it changes A LOT of files
 TODO: new method: file contents search (searchfile)
 TODO: new method: directory size summary (largedirs)
+TODO: new method: directory counts with files modified in the past X amount of hours - maybe even aggregated so I can see the most churn-y of directories
 
 */
 
