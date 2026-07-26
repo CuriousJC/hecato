@@ -1,5 +1,14 @@
 *.log
 
+#####Claude Code Ignore
+# Project-scoped Claude Code permission allowlist. Written by approving prompts
+# during a session, so it accumulates one-off command strings that never match
+# again. Kept local rather than shared. `settings.local.json` is separately
+# ignored globally in ~/.config/git/ignore.
+#
+# If this ever becomes worth sharing, it needs `git add -f`.
+.claude/settings.json
+
 # If you prefer the allow list template instead of the deny list, see community template:
 # https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
 #
