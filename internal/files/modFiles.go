@@ -3,9 +3,11 @@ package files
 import (
 	"sort"
 	"strconv"
+
+	"github.com/curiousjc/hecato/internal/ignore"
 )
 
-func GetModFiles(target string, hits string) (foundFiles []File, errorFiles []File, err error) {
+func GetModFiles(target string, hits string, ig *ignore.Matcher) (foundFiles []File, errorFiles []File, err error) {
 
 	// Convert hits from string to int
 	hitsInt, err := strconv.Atoi(hits)
@@ -13,7 +15,7 @@ func GetModFiles(target string, hits string) (foundFiles []File, errorFiles []Fi
 		return nil, nil, err
 	}
 
-	foundFiles, errorFiles, err = getFiles(target)
+	foundFiles, errorFiles, err = getFiles(target, ig)
 	if err != nil {
 		return nil, nil, err
 	}

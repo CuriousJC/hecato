@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`hecato` is a single-binary filesystem investigation CLI (named for the Hecatoncheires). It walks a target path and reports the top N files by some ordering. Standard library only — `go.mod` has no requires.
+`hecato` is a single-binary filesystem investigation CLI (named for the Hecatoncheires). It walks a target path and reports the top N files by some ordering. One dependency, `gopkg.in/yaml.v3`, for the config file; everything else is standard library.
 
 ## Commands
 
@@ -17,7 +17,7 @@ make vet
 go run cmd/hecato/main.go -method=largefiles -hits=10 -target='c:/windows' -verbose=true
 ```
 
-There are currently **no test files anywhere in the repo**, so `make test` passes vacuously. When adding the first test, `go test ./internal/files -run TestName -v` targets a single test.
+`internal/ignore`, `internal/config` and `internal/files` have tests; the other packages do not. A single test: `go test ./internal/ignore -run TestMatchDir -v`.
 
 `make all` and `make release` differ only in `BUILD_CONTEXT`, which is injected via ldflags and decides where `heclog` writes `app.log` — see Build metadata below. Use `make release` when you need a binary that behaves like a shipped one.
 
@@ -40,9 +40,18 @@ Three layers, and adding a capability touches all of them:
 
 - `cmd/hecato/main.go` — flag parsing plus a `switch *method` dispatch in `doWork()`. This switch is the only routing; there is no command registry.
 - `internal/files` — the analysis methods. `getFiles()` (unexported, `getFiles.go`) is the shared engine: one `filepath.Walk` returning `(foundFiles, errorFiles, err)`.
+- `internal/config` — the optional YAML config; `internal/ignore` — the pattern matcher it feeds.
 - `internal/heclog`, `internal/examples`, `internal/version` — support packages.
 
-**The method pattern.** `GetLargeFiles` and `GetModFiles` are the same function with a different comparator: parse `hits` with `Atoi`, call `getFiles(target)`, sort the whole slice, truncate to `hits`. Everything is walked and sorted in memory before truncation, so `-target=c:/` on a large volume holds every file in the slice at once. A new method means a new file in `internal/files` following that shape, a new `case` in `doWork()`, a line in `internal/examples/examples.go`, and an update to the `-method` flag help text.
+**The method pattern.** `GetLargeFiles` and `GetModFiles` are the same function with a different comparator: parse `hits` with `Atoi`, call `getFiles(target, ig)`, sort the whole slice, truncate to `hits`. Everything is walked and sorted in memory before truncation, so `-target=c:/` on a large volume holds every file in the slice at once. A new method means a new file in `internal/files` following that shape, a new `case` in `doWork()`, a line in `internal/examples/examples.go`, and an update to the `-method` flag help text.
+
+**Config and ignore.** A config is always optional — `config.Load` returns a zero `Config` and no error when none is found, and hecato behaves as it did before configs existed. Resolution is `-config`, then `hecato.yaml` beside the executable, then nothing; an explicit `-config` that does not exist is fatal, as is a malformed or misspelled one (the decoder runs with `KnownFields(true)`). The one exception is `-method=initconfig`, which is allowed to be pointed at a path that does not exist yet — that is the whole point of it. `main.go` checks for that method *before* loading, against both `-method` and `-m`, since the method is not resolved until later.
+
+`hecato.example.yaml` at the repo root is a committed copy of what `initconfig` writes. `TestExampleConfigMatchesGenerator` is the only thing keeping the two in sync — if you change `starter.go`, regenerate the example or that test fails with the command to do it. The live `hecato.yaml` is gitignored, since a local build puts the binary at the repo root and would otherwise pick it up and show it dirty.
+
+Flag precedence is **explicit flag > config > built-in default**, implemented with `flag.Visit` in `setFlags()` — `flag.Visit` walks only flags actually typed, which is the only way to tell `-hits=15` from the identical default.
+
+**Ignore patterns prune, they don't filter.** A pattern ending in `/` makes the walk return `filepath.SkipDir`, so an ignored tree is never descended into. That distinction is the whole point on a target like `c:/`. Patterns without a `/` match base names at any depth; patterns with one match the whole path. Matching is case-insensitive only on Windows, keyed off `runtime.GOOS`, which is the *build target* — a cross-compiled Linux binary correctly stays case-sensitive. The scan root itself is exempt from pruning, otherwise a pattern matching your target would silently return nothing.
 
 **Walk errors are values, not failures.** The `filepath.Walk` callback appends unreadable paths to `errorFiles` and returns `nil` rather than aborting — deliberate, so a permission-denied directory doesn't kill a scan of `c:/`. Callers surface `errorFiles` only when verbose. Preserve this when touching the walk.
 
