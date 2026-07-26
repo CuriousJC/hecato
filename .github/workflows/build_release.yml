@@ -4,80 +4,52 @@ on:
   push:
     tags:
       - "v*.*.*" # This triggers the workflow on version tags like v1.0.0
-  workflow_dispatch:
+  workflow_dispatch: # Manual run builds and uploads artifacts, but publishes nothing
+
+permissions:
+  contents: read
 
 jobs:
-  build:
+  release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # Required to publish the release; nothing else is granted
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # Needed so `git describe` in the Makefile can see tags
 
       - name: Set up Go
-        uses: actions/setup-go@v2
+        uses: actions/setup-go@v7
         with:
-          go-version: "1.22.2" # Specify the Go version you are using
+          go-version-file: go.mod # Single source of truth: the go directive in go.mod
 
-      - name: Set up Make
-        run: sudo apt-get install -y make
+      - name: Vet
+        run: go vet ./...
 
-      - name: Build with Makefile
-        run: make all
+      - name: Test
+        run: go test ./...
 
-      - name: Archive Linux build artifacts
-        uses: actions/upload-artifact@v2
+      - name: Build
+        run: make release
+
+      - name: Archive build artifacts
+        uses: actions/upload-artifact@v7
         with:
-          name: hecato-linux
-          path: hecato
+          name: hecato-binaries
+          path: |
+            hecato
+            hecato.exe
+          if-no-files-found: error
 
-      - name: Archive Windows build artifacts
-        uses: actions/upload-artifact@v2
-        with:
-          name: hecato-windows
-          path: hecato.exe
-
-  release:
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download Linux build artifacts
-        uses: actions/download-artifact@v2
-        with:
-          name: hecato-linux
-
-      - name: Download Windows build artifacts
-        uses: actions/download-artifact@v2
-        with:
-          name: hecato-windows
-
-      - name: Create GitHub Release
-        id: create_release
-        uses: actions/create-release@v1
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ github.ref }}
-          release_name: Release ${{ github.ref }}
-          draft: false
-          prerelease: false
-
-      - name: Upload Linux Release Asset
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./hecato
-          asset_name: hecato
-          asset_content_type: application/octet-stream
-
-      - name: Upload Windows Release Asset
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./hecato.exe
-          asset_name: hecato.exe
-          asset_content_type: application/octet-stream
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            hecato hecato.exe \
+            --title "Release ${{ github.ref_name }}" \
+            --generate-notes

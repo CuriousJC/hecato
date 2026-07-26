@@ -19,6 +19,11 @@
 *.so
 *.dylib
 
+# The linux build artifact from `make build-linux`. Extensionless, so the *.exe
+# rule above only catches its windows twin. Anchored to the repo root so it
+# can't shadow cmd/hecato/ or the module name.
+/hecato
+
 # Test binary, built with `go test -c`
 *.test
 

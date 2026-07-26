@@ -1,3 +1,3 @@
 module github.com/curiousjc/hecato
 
-go 1.22.2
+go 1.26.0
