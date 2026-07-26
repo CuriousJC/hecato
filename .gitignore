@@ -24,6 +24,12 @@
 # can't shadow cmd/hecato/ or the module name.
 /hecato
 
+# The live config. hecato looks for hecato.yaml beside the executable, and a
+# local build puts the executable here, so this is a working file that would
+# otherwise show up dirty every time it is tweaked. The committed reference
+# copy is hecato.example.yaml, which is tracked.
+/hecato.yaml
+
 # Test binary, built with `go test -c`
 *.test
 
