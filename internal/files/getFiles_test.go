@@ -53,12 +53,12 @@ func baseNames(found []File) map[string]bool {
 }
 
 func TestGetFilesNoMatcherReturnsEverything(t *testing.T) {
-	found, _, err := getFiles(buildTree(t), nil)
+	res, err := getFiles(buildTree(t), nil)
 	if err != nil {
 		t.Fatalf("getFiles returned error: %v", err)
 	}
 
-	got := baseNames(found)
+	got := baseNames(res.Files)
 	for _, want := range []string{"keep.txt", "skip.tmp", "dep.txt", "main.go", "gen.tmp"} {
 		if !got[want] {
 			t.Errorf("%s missing from an unfiltered walk", want)
@@ -67,12 +67,12 @@ func TestGetFilesNoMatcherReturnsEverything(t *testing.T) {
 }
 
 func TestGetFilesFiltersByPattern(t *testing.T) {
-	found, _, err := getFiles(buildTree(t), ignore.New([]string{"*.tmp"}))
+	res, err := getFiles(buildTree(t), ignore.New([]string{"*.tmp"}))
 	if err != nil {
 		t.Fatalf("getFiles returned error: %v", err)
 	}
 
-	got := baseNames(found)
+	got := baseNames(res.Files)
 	if got["skip.tmp"] || got["gen.tmp"] {
 		t.Error("*.tmp files survived the filter")
 	}
@@ -85,12 +85,12 @@ func TestGetFilesFiltersByPattern(t *testing.T) {
 // directory look identical. This asserts the observable result; the pruning
 // itself is the filepath.SkipDir return in getFiles.
 func TestGetFilesPrunesDirectories(t *testing.T) {
-	found, _, err := getFiles(buildTree(t), ignore.New([]string{"node_modules/"}))
+	res, err := getFiles(buildTree(t), ignore.New([]string{"node_modules/"}))
 	if err != nil {
 		t.Fatalf("getFiles returned error: %v", err)
 	}
 
-	got := baseNames(found)
+	got := baseNames(res.Files)
 	if got["dep.txt"] {
 		t.Error("a file under an ignored directory was returned")
 	}
@@ -105,11 +105,11 @@ func TestGetFilesNeverPrunesTheRoot(t *testing.T) {
 	root := buildTree(t)
 	pattern := filepath.Base(root) + "/"
 
-	found, _, err := getFiles(root, ignore.New([]string{pattern}))
+	res, err := getFiles(root, ignore.New([]string{pattern}))
 	if err != nil {
 		t.Fatalf("getFiles returned error: %v", err)
 	}
-	if len(found) == 0 {
+	if len(res.Files) == 0 {
 		t.Fatalf("a pattern matching the scan root emptied the results")
 	}
 }
@@ -118,11 +118,11 @@ func TestGetFilesTrailingSeparatorRootStillScans(t *testing.T) {
 	root := buildTree(t)
 	pattern := filepath.Base(root) + "/"
 
-	found, _, err := getFiles(root+string(filepath.Separator), ignore.New([]string{pattern}))
+	res, err := getFiles(root+string(filepath.Separator), ignore.New([]string{pattern}))
 	if err != nil {
 		t.Fatalf("getFiles returned error: %v", err)
 	}
-	if len(found) == 0 {
+	if len(res.Files) == 0 {
 		t.Error("a trailing separator on the target defeated the root exemption")
 	}
 }
@@ -130,11 +130,11 @@ func TestGetFilesTrailingSeparatorRootStillScans(t *testing.T) {
 func TestGetLargeFilesRespectsIgnore(t *testing.T) {
 	root := buildTree(t)
 
-	found, _, err := GetLargeFiles(root, "10", ignore.New([]string{"*.tmp"}))
+	res, err := GetLargeFiles(root, "10", ignore.New([]string{"*.tmp"}))
 	if err != nil {
 		t.Fatalf("GetLargeFiles returned error: %v", err)
 	}
-	for _, f := range found {
+	for _, f := range res.Files {
 		if strings.HasSuffix(f.Path, ".tmp") {
 			t.Errorf("GetLargeFiles returned an ignored file: %s", f.Path)
 		}
@@ -144,11 +144,11 @@ func TestGetLargeFilesRespectsIgnore(t *testing.T) {
 func TestGetModFilesRespectsIgnore(t *testing.T) {
 	root := buildTree(t)
 
-	found, _, err := GetModFiles(root, "10", ignore.New([]string{"node_modules/"}))
+	res, err := GetModFiles(root, "10", ignore.New([]string{"node_modules/"}))
 	if err != nil {
 		t.Fatalf("GetModFiles returned error: %v", err)
 	}
-	for _, f := range found {
+	for _, f := range res.Files {
 		if strings.Contains(filepath.ToSlash(f.Path), "/node_modules/") {
 			t.Errorf("GetModFiles descended into a pruned directory: %s", f.Path)
 		}
@@ -160,11 +160,95 @@ func TestHitsTruncatesButIgnoreAppliesFirst(t *testing.T) {
 
 	// Five files exist, two are .tmp. Asking for 10 should yield the three
 	// survivors, proving the filter runs before the truncation.
-	found, _, err := GetLargeFiles(root, "10", ignore.New([]string{"*.tmp"}))
+	res, err := GetLargeFiles(root, "10", ignore.New([]string{"*.tmp"}))
 	if err != nil {
 		t.Fatalf("GetLargeFiles returned error: %v", err)
 	}
-	if len(found) != 3 {
-		t.Errorf("got %d files, want 3 after ignoring *.tmp", len(found))
+	if len(res.Files) != 3 {
+		t.Errorf("got %d files, want 3 after ignoring *.tmp", len(res.Files))
+	}
+}
+
+func TestResultCountsScannedIgnoredAndPruned(t *testing.T) {
+	// The fixture is 5 files: keep.txt, skip.tmp, node_modules/dep.txt,
+	// src/main.go, src/gen.tmp.
+	root := buildTree(t)
+
+	res, err := getFiles(root, ignore.New([]string{"*.tmp", "node_modules/"}))
+	if err != nil {
+		t.Fatalf("getFiles returned error: %v", err)
+	}
+
+	// dep.txt is never scanned, because node_modules is pruned before descent.
+	// That is the whole point of pruning, and it is why Scanned is 4 not 5.
+	if res.Scanned != 4 {
+		t.Errorf("Scanned = %d, want 4 (5 files less the one under a pruned dir)", res.Scanned)
+	}
+	if res.Ignored != 2 {
+		t.Errorf("Ignored = %d, want 2 (skip.tmp and gen.tmp)", res.Ignored)
+	}
+	if res.Pruned != 1 {
+		t.Errorf("Pruned = %d, want 1 (node_modules)", res.Pruned)
+	}
+	if res.Matched != 2 {
+		t.Errorf("Matched = %d, want 2 (keep.txt and main.go)", res.Matched)
+	}
+	if res.Elapsed <= 0 {
+		t.Error("Elapsed was not recorded")
+	}
+}
+
+func TestResultMatchedExceedsShownWhenHitsTruncates(t *testing.T) {
+	root := buildTree(t)
+
+	res, err := GetLargeFiles(root, "2", nil)
+	if err != nil {
+		t.Fatalf("GetLargeFiles returned error: %v", err)
+	}
+
+	if len(res.Files) != 2 {
+		t.Errorf("returned %d files, want 2", len(res.Files))
+	}
+	// Matched records the pre-truncation count, so a run can say "5 matched,
+	// showing the top 2" rather than implying only 2 existed.
+	if res.Matched != 5 {
+		t.Errorf("Matched = %d, want 5", res.Matched)
+	}
+}
+
+func TestHumanBytes(t *testing.T) {
+	tests := []struct {
+		n    int64
+		want string
+	}{
+		{0, "0 B"},
+		{1, "1 B"},
+		{999, "999 B"},
+		{1023, "1023 B"},
+		{1024, "1.00 KB"},
+		{1536, "1.50 KB"},
+		{1024 * 1024, "1.00 MB"},
+		{1024 * 1024 * 1024, "1.00 GB"},
+		{5 * 1024 * 1024 * 1024, "5.00 GB"},
+		{1024 * 1024 * 1024 * 1024, "1.00 TB"},
+	}
+
+	for _, tt := range tests {
+		if got := HumanBytes(tt.n); got != tt.want {
+			t.Errorf("HumanBytes(%d) = %q, want %q", tt.n, got, tt.want)
+		}
+	}
+}
+
+// The old SizeInMB reported "0.00 MB" for a small file, which is technically
+// true and practically useless. This is the behaviour HumanSize replaces.
+func TestHumanSizeBeatsSizeInMBForSmallFiles(t *testing.T) {
+	f := File{Size: 400}
+
+	if got := f.SizeInMB(); got != "0.00 MB" {
+		t.Errorf("SizeInMB() = %q, want 0.00 MB (documenting the old behaviour)", got)
+	}
+	if got := f.HumanSize(); got != "400 B" {
+		t.Errorf("HumanSize() = %q, want 400 B", got)
 	}
 }
