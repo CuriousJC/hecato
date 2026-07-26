@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`hecato` is a single-binary filesystem investigation CLI (named for the Hecatoncheires). It walks a target path and reports the top N files by some ordering. One dependency, `gopkg.in/yaml.v3`, for the config file; everything else is standard library.
+`hecato` is a single-binary filesystem investigation CLI (named for the Hecatoncheires). It walks a target path and reports the top N files by some ordering. Two direct dependencies: `gopkg.in/yaml.v3` for the config file and `github.com/fatih/color` for console output.
 
 ## Commands
 
@@ -17,7 +17,7 @@ make vet
 go run cmd/hecato/main.go -method=largefiles -hits=10 -target='c:/windows' -verbose=true
 ```
 
-`internal/ignore`, `internal/config` and `internal/files` have tests; the other packages do not. A single test: `go test ./internal/ignore -run TestMatchDir -v`.
+`cmd/hecato`, `internal/heclog`, `internal/config`, `internal/files` and `internal/ignore` have tests; `internal/examples` and `internal/version` do not. A single test: `go test ./internal/ignore -run TestMatchDir -v`.
 
 `make all` and `make release` differ only in `BUILD_CONTEXT`, which is injected via ldflags and decides where `heclog` writes `app.log` — see Build metadata below. Use `make release` when you need a binary that behaves like a shipped one.
 
@@ -39,11 +39,11 @@ The binary filename is load-bearing: `BINARY_NAME` in the Makefile must stay `he
 Three layers, and adding a capability touches all of them:
 
 - `cmd/hecato/main.go` — flag parsing plus a `switch *method` dispatch in `doWork()`. This switch is the only routing; there is no command registry.
-- `internal/files` — the analysis methods. `getFiles()` (unexported, `getFiles.go`) is the shared engine: one `filepath.Walk` returning `(foundFiles, errorFiles, err)`.
+- `internal/files` — the analysis methods. `getFiles()` (unexported, `getFiles.go`) is the shared engine: one `filepath.Walk` returning a `*Result`.
 - `internal/config` — the optional YAML config; `internal/ignore` — the pattern matcher it feeds.
 - `internal/heclog`, `internal/examples`, `internal/version` — support packages.
 
-**The method pattern.** `GetLargeFiles` and `GetModFiles` are the same function with a different comparator: parse `hits` with `Atoi`, call `getFiles(target, ig)`, sort the whole slice, truncate to `hits`. Everything is walked and sorted in memory before truncation, so `-target=c:/` on a large volume holds every file in the slice at once. A new method means a new file in `internal/files` following that shape, a new `case` in `doWork()`, a line in `internal/examples/examples.go`, and an update to the `-method` flag help text.
+**The method pattern.** `GetLargeFiles` and `GetModFiles` are the same function with a different comparator: parse `hits` with `Atoi`, call `getFiles(target, ig)`, sort `Result.Files`, truncate to `hits` via the shared `truncate` helper. Everything is walked and sorted in memory before truncation, so `-target=c:/` on a large volume holds every file in the slice at once. A new method means a new file in `internal/files` following that shape, a new `case` in `doWork()`, a line in `internal/examples/examples.go`, and an update to the `-method` flag help text.
 
 **Config and ignore.** A config is always optional — `config.Load` returns a zero `Config` and no error when none is found, and hecato behaves as it did before configs existed. Resolution is `-config`, then `hecato.yaml` beside the executable, then nothing; an explicit `-config` that does not exist is fatal, as is a malformed or misspelled one (the decoder runs with `KnownFields(true)`). The one exception is `-method=initconfig`, which is allowed to be pointed at a path that does not exist yet — that is the whole point of it. `main.go` checks for that method *before* loading, against both `-method` and `-m`, since the method is not resolved until later.
 
@@ -53,9 +53,21 @@ Flag precedence is **explicit flag > config > built-in default**, implemented wi
 
 **Ignore patterns prune, they don't filter.** A pattern ending in `/` makes the walk return `filepath.SkipDir`, so an ignored tree is never descended into. That distinction is the whole point on a target like `c:/`. Patterns without a `/` match base names at any depth; patterns with one match the whole path. Matching is case-insensitive only on Windows, keyed off `runtime.GOOS`, which is the *build target* — a cross-compiled Linux binary correctly stays case-sensitive. The scan root itself is exempt from pruning, otherwise a pattern matching your target would silently return nothing.
 
-**Walk errors are values, not failures.** The `filepath.Walk` callback appends unreadable paths to `errorFiles` and returns `nil` rather than aborting — deliberate, so a permission-denied directory doesn't kill a scan of `c:/`. Callers surface `errorFiles` only when verbose. Preserve this when touching the walk.
+**Walk errors are values, not failures.** The `filepath.Walk` callback appends unreadable paths to `Result.Errors` and returns `nil` rather than aborting — deliberate, so a permission-denied directory doesn't kill a scan of `c:/`. Preserve this when touching the walk.
 
-**Logging is dual-output.** `heclog.LogMessage(logToConsole bool, ...)` always writes to `app.log` and echoes to stdout only when the first arg is true. Call sites pass either a literal `true` (always shown) or the `logToConsoleVerbose` package var in `main.go`, which is assigned from `-verbose` at the end of `initFlags()`. Anything logged before that assignment uses the `true` default.
+That convention has one sharp edge, which is why `checkTarget()` exists: a target that cannot be walked at all produces an empty result and no error, because the failure lands in `Result.Errors` like any other unreadable path. `main.go` therefore validates the target *before* the walk for any method in `walkingMethods`. Without that, a typo'd `-target` looks exactly like an empty disk.
+
+**`Result` carries counts, not just files.** `Scanned`, `Ignored`, `Pruned` and `Matched` exist so a run can say what it did. Note `Scanned` does not include files under a pruned directory — they are never looked at, which is the entire point of pruning, and why `Pruned` counts directories separately rather than being folded into `Ignored`. `Matched` is the pre-truncation count, so the summary can say "18 files matched, showing the top 5".
+
+**Logging is dual-output, and the two outputs are deliberately different.** Every `heclog` helper takes a leading bool controlling whether the message also reaches the console; the log file always gets it either way, because `app.log` is the record of what happened and `-verbose` only governs what you were shown at the time.
+
+The console gets colour; `app.log` gets the identical text with no escape codes. Everything funnels through the unexported `write()` in `heclog.go`, which formats once, sends the plain string to `log`, and only then applies colour on the way to `color.Output`. `TestLogFileNeverGetsColorCodes` guards this — if it fails, the log file has become ungreppable. Anything added to heclog must preserve that split.
+
+Use the semantic helpers (`Heading`, `Info`, `Detail`, `Success`, `Warn`, `Error`, `Field`) rather than `LogMessage`/`LogMessagef`, which are the uncoloured originals kept for compatibility.
+
+Colour turns itself off when stdout is not a terminal and when `NO_COLOR` is set — both handled by `fatih/color`, not by us. `-no-color` calls `heclog.DisableColor()` for the explicit case.
+
+`log.Lshortfile` is deliberately *not* set: since every message goes through `write()`, it would print the same constant on every line.
 
 ## Build metadata
 
@@ -68,10 +80,20 @@ Four values are injected at link time by the Makefile's `LDFLAGS`, and all four 
 
 Present in the code as written — don't treat them as bugs to fix unless asked, but don't be surprised by them either:
 
-- The `-version` and `-log` flags are defined and printed but never consulted. Version is reachable only via `-method=version`; file logging is unconditional.
-- The `-method` help string advertises `largedirs`, which does not exist, and omits `modfiles`, which does.
+- The `-version` and `-log` flags are defined but never consulted. Version is reachable only via `-method=version`; file logging is unconditional.
 - `hits` is threaded through as a `string` and converted inside each `Get*` function.
+- `File.SizeInMB()` survives alongside `HumanSize()`. It reports `0.00 MB` for anything under about 5 KB, which is why display uses `HumanSize`.
 
 ## Roadmap
 
-Planned work lives in the header comment block of `cmd/hecato/main.go` (ignore-file support, extension search, `searchfile`, `largedirs`, directory churn counts). Check there before proposing new methods. The README also notes an intent to eventually use concurrency in the walk — it is fully sequential today.
+Planned work lives in the header comment block of `cmd/hecato/main.go`. Check there before proposing new methods or performance work.
+
+Two performance items in that list have measured numbers behind them, taken on `C:/Program Files` (68,361 files) on the author's machine, warm cache:
+
+| | time | vs today |
+|---|---|---|
+| `filepath.Walk` (today) | 3,619ms | — |
+| `filepath.WalkDir` | 549ms | 6.6x |
+| parallel, 8 workers | 102ms | 35x |
+
+The `WalkDir` win is largely Windows-specific: `FindNextFile` returns size and timestamps with the directory enumeration, so `DirEntry.Info()` is free. On Linux `getdents` does not, so `Info()` still costs an `lstat` and the released Linux binary will see less. Both figures are warm-cache; a cold run will be slower and the parallel gain smaller.
