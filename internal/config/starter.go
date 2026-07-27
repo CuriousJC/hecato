@@ -32,6 +32,12 @@ defaults:
   hits: 15
   verbose: false
 
+  # How many directories to read at once. Omit or set 0 for the built-in
+  # default of 8, which was measured rather than guessed: on a 12-CPU machine a
+  # full c:/ scan took 8.9s at 4 workers, 6.3s at 8, and 6.0s at 16. Past 8 the
+  # work is waiting on the disk rather than the CPU.
+  #workers: 8
+
 # Skip the operating-system files that otherwise dominate a largefiles run,
 # pagefile.sys above all. The built-in list also covers hiberfil.sys,
 # swapfile.sys, $Recycle.Bin and friends.

@@ -55,6 +55,10 @@ type Defaults struct {
 	Target  string `yaml:"target"`
 	Hits    int    `yaml:"hits"`
 	Verbose bool   `yaml:"verbose"`
+
+	// Workers is how many directories are read concurrently. Zero means use
+	// the built-in default; see files.DefaultWorkers for why it is 8.
+	Workers int `yaml:"workers"`
 }
 
 // Loaded reports whether a config file was actually found and read.

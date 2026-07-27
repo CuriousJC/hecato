@@ -37,9 +37,6 @@ TODO: output: modfiles prints absolute timestamps. A relative one - "2 minutes a
 TODO: output: unreadable paths are reported as a bare count. Grouping them by cause - "262 permission denied, 6 path too long" - would say whether they matter, instead of making -verbose and 268 lines the only way to find out
 TODO: output: the run exits 0 even when paths could not be read. Defensible, since the scan did succeed, but it means a script cannot tell a clean scan from one that silently skipped a quarter of a tree
 
-TODO: performance: parallelise the walk with a worker pool over directories. A synthetic benchmark measured 5x on top of WalkDir with 8 workers on 12 CPUs (549ms -> 102ms on C:/Program Files), but treat that as an upper bound: the WalkDir change itself was benchmarked at 6.6x on the same synthetic case and delivered 3.07x on a real c:/ scan, because a full-volume walk is more I/O-bound than the benchmark. Pruning gets simpler rather than harder, since a worker just does not enqueue an ignored directory
-TODO: performance: getFiles holds every file in memory before sorting and truncating, so a scan of a whole volume scales with the volume rather than with -hits. A bounded top-N heap per worker, merged at the end, is the real fix and is much easier to build into the concurrent version than to retrofit afterwards
-
 */
 
 package main
@@ -72,6 +69,7 @@ var (
 	logFlag     *bool
 	configFlag  *string
 	noColorFlag *bool
+	workersFlag *int
 )
 
 var buildContext string = "development"
@@ -132,7 +130,7 @@ func doWork(cfg *config.Config) {
 		heclog.Info(true, "")
 		heclog.Info(true, "Scanning %s for the %s largest files...", *target, *hits)
 
-		res, err := files.GetLargeFiles(*target, *hits, ig)
+		res, err := files.GetLargeFiles(*target, *hits, ig, *workersFlag)
 		if err != nil {
 			heclog.Error(true, "Could not list files: %v", err)
 			os.Exit(1)
@@ -174,7 +172,7 @@ func doWork(cfg *config.Config) {
 		heclog.Info(true, "")
 		heclog.Info(true, "Scanning %s for the %s most recently modified files...", *target, *hits)
 
-		res, err := files.GetModFiles(*target, *hits, ig)
+		res, err := files.GetModFiles(*target, *hits, ig, *workersFlag)
 		if err != nil {
 			heclog.Error(true, "Could not list files: %v", err)
 			os.Exit(1)
@@ -380,6 +378,7 @@ func initFlags() *config.Config {
 	versionFlag = flag.Bool("version", false, "OPTIONAL: Show version")
 	configFlag = flag.String("config", "", "OPTIONAL: Path to a config file. Defaults to hecato.yaml beside the executable.")
 	noColorFlag = flag.Bool("no-color", false, "OPTIONAL: Disable coloured output. Colour is off automatically when piped or when NO_COLOR is set.")
+	workersFlag = flag.Int("workers", files.DefaultWorkers, "OPTIONAL: How many directories to read concurrently.")
 
 	flag.Parse()
 
@@ -477,6 +476,9 @@ func applyConfigDefaults(cfg *config.Config) {
 	if d.Verbose && !set["verbose"] {
 		*verbose = true
 	}
+	if d.Workers > 0 && !set["workers"] {
+		*workersFlag = d.Workers
+	}
 }
 
 // initConfig writes a starter config, at -config if given or beside the
@@ -519,6 +521,9 @@ func printFlags(cfg *config.Config) {
 	if walkingMethods[*method] {
 		heclog.Field(true, "Target", *target)
 		heclog.Field(true, "Hits", *hits)
+		if *workersFlag != files.DefaultWorkers {
+			heclog.Field(true, "Workers", strconv.Itoa(*workersFlag))
+		}
 	}
 
 	if cfg.Loaded() {
