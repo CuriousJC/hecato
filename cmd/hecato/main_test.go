@@ -1,9 +1,80 @@
 package main
 
 import (
+	"runtime"
 	"strings"
 	"testing"
 )
+
+// The "c:" case is the one that prompted this: it stats fine and walks fine,
+// so without the guard a run reports a confident summary of the working
+// directory instead of the volume.
+func TestDriveRelativeSyntax(t *testing.T) {
+	tests := []struct {
+		target string
+		want   bool
+	}{
+		{"c:", true},
+		{"C:", true},
+		{"d:", true},
+		{"c:temp", true},
+		{"c:temp/sub", true},
+
+		{"c:/", false},  // volume root, the form we want people using
+		{"c:\\", false}, // same, backslash
+		{"c:/windows", false},
+		{"c:\\windows", false},
+
+		{"", false},
+		{".", false},
+		{"internal", false},
+		{"/usr/local", false},
+		{"1:", false},          // not a drive letter
+		{"::", false},          // ditto
+		{"ab:", false},         // colon in the wrong place
+		{"relative:x", false},  // ditto
+		{"\\\\srv\\sh", false}, // UNC, no drive letter at all
+	}
+
+	for _, tt := range tests {
+		if got := driveRelativeSyntax(tt.target); got != tt.want {
+			t.Errorf("driveRelativeSyntax(%q) = %v, want %v", tt.target, got, tt.want)
+		}
+	}
+}
+
+// isDriveRelative is keyed off the build target, matching internal/ignore: a
+// cross-compiled linux binary must keep reading "c:" as an ordinary filename.
+func TestIsDriveRelativeFollowsBuildTarget(t *testing.T) {
+	want := runtime.GOOS == "windows"
+
+	if got := isDriveRelative("c:"); got != want {
+		t.Errorf("isDriveRelative(%q) = %v, want %v on %s", "c:", got, want, runtime.GOOS)
+	}
+
+	// The unambiguous form stays acceptable everywhere.
+	if isDriveRelative("c:/") {
+		t.Errorf("isDriveRelative(%q) = true, want false on %s", "c:/", runtime.GOOS)
+	}
+}
+
+func TestDriveRootHint(t *testing.T) {
+	tests := []struct {
+		target string
+		want   string
+	}{
+		{"c:", "c:/"},
+		{"D:", "D:/"},
+		{"c:temp", "c:/temp"},
+		{"c:temp/sub", "c:/temp/sub"},
+	}
+
+	for _, tt := range tests {
+		if got := driveRootHint(tt.target); got != tt.want {
+			t.Errorf("driveRootHint(%q) = %q, want %q", tt.target, got, tt.want)
+		}
+	}
+}
 
 func TestPlural(t *testing.T) {
 	tests := []struct {

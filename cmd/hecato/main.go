@@ -46,6 +46,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -232,6 +233,18 @@ func checkTarget() bool {
 		return false
 	}
 
+	// This has to come before the Stat, because the Stat would succeed. A
+	// drive-relative target is a real, readable directory - just not the one the
+	// user meant - so every check below it passes and the run reports a confident
+	// summary of the wrong volume.
+	if isDriveRelative(*target) {
+		heclog.Error(true, "Target is drive-relative, not the root of the drive: %s", *target)
+		heclog.Detail(true, "Windows reads this as \"the current directory on that drive\", so it would")
+		heclog.Detail(true, "scan wherever you last were on %s rather than the whole volume.", (*target)[:2])
+		heclog.Detail(true, "  hecato -method=%s -target=\"%s\"", *method, driveRootHint(*target))
+		return false
+	}
+
 	info, err := os.Stat(*target)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -248,6 +261,43 @@ func checkTarget() bool {
 	}
 
 	return true
+}
+
+// isDriveRelative reports whether target is a Windows drive-relative path, the
+// "c:" and "c:temp" forms. Windows resolves those against a current directory
+// it tracks per drive, so "c:" means "wherever you last were on C:" and not the
+// root of the volume. Someone scanning a disk essentially never means that, and
+// it is the worst kind of wrong: it stats fine, walks fine, and returns a
+// plausible handful of files from the working directory with no error at all.
+//
+// The GOOS check is the *build* target, matching internal/ignore: on linux "c:"
+// is an ordinary relative filename and a cross-compiled binary must keep
+// treating it as one. driveRelativeSyntax holds the parsing so it can be tested
+// on any platform rather than only on Windows.
+func isDriveRelative(target string) bool {
+	return runtime.GOOS == "windows" && driveRelativeSyntax(target)
+}
+
+// driveRelativeSyntax is isDriveRelative without the platform gate.
+func driveRelativeSyntax(target string) bool {
+	if len(target) < 2 || target[1] != ':' {
+		return false
+	}
+
+	c := target[0]
+	if !('a' <= c && c <= 'z' || 'A' <= c && c <= 'Z') {
+		return false
+	}
+
+	// "c:/" and "c:\" name the volume root and are exactly right. It is the
+	// absence of that separator that makes the path relative.
+	return len(target) == 2 || (target[2] != '/' && target[2] != '\\')
+}
+
+// driveRootHint rewrites a drive-relative target into the absolute form the
+// user probably wanted, so the error can suggest something they can paste back.
+func driveRootHint(target string) string {
+	return target[:2] + "/" + target[2:]
 }
 
 // reportScan is the closing summary. It exists so a run says what it actually
