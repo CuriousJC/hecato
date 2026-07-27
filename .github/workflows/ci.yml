@@ -37,5 +37,12 @@ jobs:
       - name: Test
         run: go test ./...
 
+      # The walk is a worker pool, so the race detector is the check that
+      # matters most here. It needs cgo and a C compiler, which the Linux
+      # runner has and a stock Windows dev box does not -- so this is the only
+      # place it reliably runs.
+      - name: Test with the race detector
+        run: go test -race ./...
+
       - name: Build both targets
         run: make all

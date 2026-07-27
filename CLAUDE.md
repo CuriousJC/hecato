@@ -39,11 +39,11 @@ The binary filename is load-bearing: `BINARY_NAME` in the Makefile must stay `he
 Three layers, and adding a capability touches all of them:
 
 - `cmd/hecato/main.go` — flag parsing plus a `switch *method` dispatch in `doWork()`. This switch is the only routing; there is no command registry.
-- `internal/files` — the analysis methods. `getFiles()` (unexported, `getFiles.go`) is the shared engine: one `filepath.Walk` returning a `*Result`.
+- `internal/files` — the analysis methods. `scan()` (unexported, `scan.go`) is the shared engine: a worker pool over directories returning a `*Result`. `topn.go` is the bounded collector it accumulates into; `getFiles.go` now holds only the `Result` type.
 - `internal/config` — the optional YAML config; `internal/ignore` — the pattern matcher it feeds.
 - `internal/heclog`, `internal/examples`, `internal/version` — support packages.
 
-**The method pattern.** `GetLargeFiles` and `GetModFiles` are the same function with a different comparator: parse `hits` with `Atoi`, call `getFiles(target, ig)`, sort `Result.Files`, truncate to `hits` via the shared `truncate` helper. Everything is walked and sorted in memory before truncation, so `-target=c:/` on a large volume holds every file in the slice at once. A new method means a new file in `internal/files` following that shape, a new `case` in `doWork()`, a line in `internal/examples/examples.go`, and an update to the `-method` flag help text.
+**The method pattern.** `GetLargeFiles` and `GetModFiles` are now nothing but a `worseFunc` and an `Atoi`: they parse `hits` and hand `scan` a comparator saying which of two files is the weaker candidate. Adding a method that ranks files differently means writing one two-line function. Everything is walked and sorted in memory before truncation, so `-target=c:/` on a large volume holds every file in the slice at once. A new method means a new file in `internal/files` following that shape, a new `case` in `doWork()`, a line in `internal/examples/examples.go`, and an update to the `-method` flag help text.
 
 **Config and ignore.** A config is always optional — `config.Load` returns a zero `Config` and no error when none is found, and hecato behaves as it did before configs existed. Resolution is `-config`, then `hecato.yaml` beside the executable, then nothing; an explicit `-config` that does not exist is fatal, as is a malformed or misspelled one (the decoder runs with `KnownFields(true)`). The one exception is `-method=initconfig`, which is allowed to be pointed at a path that does not exist yet — that is the whole point of it. `main.go` checks for that method *before* loading, against both `-method` and `-m`, since the method is not resolved until later.
 
@@ -53,7 +53,7 @@ Flag precedence is **explicit flag > config > built-in default**, implemented wi
 
 **Ignore patterns prune, they don't filter.** A pattern ending in `/` makes the walk return `filepath.SkipDir`, so an ignored tree is never descended into. That distinction is the whole point on a target like `c:/`. Patterns without a `/` match base names at any depth; patterns with one match the whole path. Matching is case-insensitive only on Windows, keyed off `runtime.GOOS`, which is the *build target* — a cross-compiled Linux binary correctly stays case-sensitive. The scan root itself is exempt from pruning, otherwise a pattern matching your target would silently return nothing.
 
-**Walk errors are values, not failures.** The `filepath.Walk` callback appends unreadable paths to `Result.Errors` and returns `nil` rather than aborting — deliberate, so a permission-denied directory doesn't kill a scan of `c:/`. Preserve this when touching the walk.
+**Walk errors are values, not failures.** `readDir` appends unreadable paths to the worker's shard and carries on rather than aborting — deliberate, so a permission-denied directory doesn't kill a scan of `c:/`. Preserve this when touching the walk.
 
 That convention has one sharp edge, which is why `checkTarget()` exists: a target that cannot be walked at all produces an empty result and no error, because the failure lands in `Result.Errors` like any other unreadable path. `main.go` therefore validates the target *before* the walk for any method in `walkingMethods`. Without that, a typo'd `-target` looks exactly like an empty disk.
 
@@ -88,12 +88,37 @@ Present in the code as written — don't treat them as bugs to fix unless asked,
 
 Planned work lives in the header comment block of `cmd/hecato/main.go`. Check there before proposing new methods or performance work.
 
-Two performance items in that list have measured numbers behind them, taken on `C:/Program Files` (68,361 files) on the author's machine, warm cache:
+### Concurrency
 
-| | time | vs today |
+`scan` is a worker pool over directories. Three things about it are load-bearing:
+
+**The queue is an unbounded slice under a mutex, not a channel.** A buffered channel deadlocks here: workers are *also* producers, so once the buffer fills, every worker blocks trying to enqueue a subdirectory and nobody is left to drain it. The alternative fix — spawning a goroutine per blocked send — trades a deadlock for unbounded goroutines.
+
+**Termination is `pending`, not an empty queue.** An empty queue means nothing while a worker is still running and might enqueue children. `finish()` decrements `pending` and only closes when it hits zero, and callers must push a directory's children *before* calling it or the walk ends early.
+
+**Each worker owns a shard.** Counters and a private `topN`, merged once at the end, so the scanning path takes no locks at all. `topN.merge` is tested to give the same answer as a single collector — otherwise the result would depend on which worker happened to see which file.
+
+The `Matcher` is read-only once built, which is what makes sharing one across workers safe.
+
+**The race detector needs cgo**, so it cannot run on a stock Windows dev box. `ci.yml` runs `go test -race ./...` on Linux; that is the only place it reliably executes.
+
+### A note on benchmark numbers
+
+`filepath.Walk` was replaced by `filepath.WalkDir`. Worth recording what that taught us, because the remaining performance TODO carries a number from the same source:
+
+A full `c:/` scan, 939,000 files, measured at each step:
+
+| | time | peak memory |
 |---|---|---|
-| `filepath.Walk` (today) | 3,619ms | — |
-| `filepath.WalkDir` | 549ms | 6.6x |
-| parallel, 8 workers | 102ms | 35x |
+| `filepath.Walk`, serial | 85.8s | — |
+| `filepath.WalkDir` | 27.9s | 557.8 MB |
+| + worker pool and top-N heap | 20.2s | — |
+| + ignore matcher rewrite | **5.6s** | **95.7 MB** |
 
-The `WalkDir` win is largely Windows-specific: `FindNextFile` returns size and timestamps with the directory enumeration, so `DirEntry.Info()` is free. On Linux `getdents` does not, so `Info()` still costs an `lstat` and the released Linux binary will see less. Both figures are warm-cache; a cold run will be slower and the parallel gain smaller.
+Two lessons worth keeping:
+
+**Synthetic benchmarks overstated everything.** `WalkDir` measured 6.6x on a warm-cache `C:/Program Files` and delivered 3.07x on a real volume. The parallel walk measured 5.3x and delivered 4.8x only *after* the matcher was fixed. Always re-measure on a real target.
+
+**The bottleneck moved.** After the worker pool, the walk was 5.6s and pattern matching was 14.6s — 72% of runtime, invisible until measured by rerunning with zero patterns. That is why `ruleSet` splits literal patterns from globs.
+
+The `WalkDir` win is also largely Windows-specific: `FindNextFile` returns size and timestamps with the directory enumeration, so `DirEntry.Info()` is nearly free. On Linux `getdents` does not, so `Info()` still costs an `lstat` and the released Linux binary will see less.

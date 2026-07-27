@@ -52,11 +52,21 @@ func baseNames(found []File) map[string]bool {
 	return out
 }
 
-func TestGetFilesNoMatcherReturnsEverything(t *testing.T) {
-	res, err := getFiles(buildTree(t), nil)
+// walkAll runs a scan with a limit high enough that nothing is dropped for
+// being outside the top N, so these tests exercise the walk rather than the
+// bounded collector. Four workers rather than one so the concurrency is
+// actually exercised; the race detector runs these in CI.
+func walkAll(t *testing.T, root string, ig *ignore.Matcher) *Result {
+	t.Helper()
+	res, err := scan(root, ig, 4, 1000, worseBySize)
 	if err != nil {
-		t.Fatalf("getFiles returned error: %v", err)
+		t.Fatalf("scan returned error: %v", err)
 	}
+	return res
+}
+
+func TestGetFilesNoMatcherReturnsEverything(t *testing.T) {
+	res := walkAll(t, buildTree(t), nil)
 
 	got := baseNames(res.Files)
 	for _, want := range []string{"keep.txt", "skip.tmp", "dep.txt", "main.go", "gen.tmp"} {
@@ -67,10 +77,7 @@ func TestGetFilesNoMatcherReturnsEverything(t *testing.T) {
 }
 
 func TestGetFilesFiltersByPattern(t *testing.T) {
-	res, err := getFiles(buildTree(t), ignore.New([]string{"*.tmp"}))
-	if err != nil {
-		t.Fatalf("getFiles returned error: %v", err)
-	}
+	res := walkAll(t, buildTree(t), ignore.New([]string{"*.tmp"}))
 
 	got := baseNames(res.Files)
 	if got["skip.tmp"] || got["gen.tmp"] {
@@ -85,10 +92,7 @@ func TestGetFilesFiltersByPattern(t *testing.T) {
 // directory look identical. This asserts the observable result; the pruning
 // itself is the filepath.SkipDir return in getFiles.
 func TestGetFilesPrunesDirectories(t *testing.T) {
-	res, err := getFiles(buildTree(t), ignore.New([]string{"node_modules/"}))
-	if err != nil {
-		t.Fatalf("getFiles returned error: %v", err)
-	}
+	res := walkAll(t, buildTree(t), ignore.New([]string{"node_modules/"}))
 
 	got := baseNames(res.Files)
 	if got["dep.txt"] {
@@ -105,10 +109,7 @@ func TestGetFilesNeverPrunesTheRoot(t *testing.T) {
 	root := buildTree(t)
 	pattern := filepath.Base(root) + "/"
 
-	res, err := getFiles(root, ignore.New([]string{pattern}))
-	if err != nil {
-		t.Fatalf("getFiles returned error: %v", err)
-	}
+	res := walkAll(t, root, ignore.New([]string{pattern}))
 	if len(res.Files) == 0 {
 		t.Fatalf("a pattern matching the scan root emptied the results")
 	}
@@ -118,10 +119,7 @@ func TestGetFilesTrailingSeparatorRootStillScans(t *testing.T) {
 	root := buildTree(t)
 	pattern := filepath.Base(root) + "/"
 
-	res, err := getFiles(root+string(filepath.Separator), ignore.New([]string{pattern}))
-	if err != nil {
-		t.Fatalf("getFiles returned error: %v", err)
-	}
+	res := walkAll(t, root+string(filepath.Separator), ignore.New([]string{pattern}))
 	if len(res.Files) == 0 {
 		t.Error("a trailing separator on the target defeated the root exemption")
 	}
@@ -130,7 +128,7 @@ func TestGetFilesTrailingSeparatorRootStillScans(t *testing.T) {
 func TestGetLargeFilesRespectsIgnore(t *testing.T) {
 	root := buildTree(t)
 
-	res, err := GetLargeFiles(root, "10", ignore.New([]string{"*.tmp"}))
+	res, err := GetLargeFiles(root, "10", ignore.New([]string{"*.tmp"}), 4)
 	if err != nil {
 		t.Fatalf("GetLargeFiles returned error: %v", err)
 	}
@@ -144,7 +142,7 @@ func TestGetLargeFilesRespectsIgnore(t *testing.T) {
 func TestGetModFilesRespectsIgnore(t *testing.T) {
 	root := buildTree(t)
 
-	res, err := GetModFiles(root, "10", ignore.New([]string{"node_modules/"}))
+	res, err := GetModFiles(root, "10", ignore.New([]string{"node_modules/"}), 4)
 	if err != nil {
 		t.Fatalf("GetModFiles returned error: %v", err)
 	}
@@ -160,7 +158,7 @@ func TestHitsTruncatesButIgnoreAppliesFirst(t *testing.T) {
 
 	// Five files exist, two are .tmp. Asking for 10 should yield the three
 	// survivors, proving the filter runs before the truncation.
-	res, err := GetLargeFiles(root, "10", ignore.New([]string{"*.tmp"}))
+	res, err := GetLargeFiles(root, "10", ignore.New([]string{"*.tmp"}), 4)
 	if err != nil {
 		t.Fatalf("GetLargeFiles returned error: %v", err)
 	}
@@ -174,10 +172,7 @@ func TestResultCountsScannedIgnoredAndPruned(t *testing.T) {
 	// src/main.go, src/gen.tmp.
 	root := buildTree(t)
 
-	res, err := getFiles(root, ignore.New([]string{"*.tmp", "node_modules/"}))
-	if err != nil {
-		t.Fatalf("getFiles returned error: %v", err)
-	}
+	res := walkAll(t, root, ignore.New([]string{"*.tmp", "node_modules/"}))
 
 	// dep.txt is never scanned, because node_modules is pruned before descent.
 	// That is the whole point of pruning, and it is why Scanned is 4 not 5.
@@ -193,15 +188,20 @@ func TestResultCountsScannedIgnoredAndPruned(t *testing.T) {
 	if res.Matched != 2 {
 		t.Errorf("Matched = %d, want 2 (keep.txt and main.go)", res.Matched)
 	}
-	if res.Elapsed <= 0 {
-		t.Error("Elapsed was not recorded")
+	// Only that it is non-negative. Asserting a positive duration would be
+	// flaky: on Windows the monotonic clock is coarser than a five-file
+	// WalkDir, so time.Since legitimately returns exactly zero. This assertion
+	// used to pass only because filepath.Walk's per-file lstat calls were slow
+	// enough to tick the clock.
+	if res.Elapsed < 0 {
+		t.Errorf("Elapsed = %v, want a non-negative duration", res.Elapsed)
 	}
 }
 
 func TestResultMatchedExceedsShownWhenHitsTruncates(t *testing.T) {
 	root := buildTree(t)
 
-	res, err := GetLargeFiles(root, "2", nil)
+	res, err := GetLargeFiles(root, "2", nil, 4)
 	if err != nil {
 		t.Fatalf("GetLargeFiles returned error: %v", err)
 	}

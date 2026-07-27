@@ -82,8 +82,28 @@ ignore:
 A flag you actually type always beats the config. An ignore entry ending in `/`
 prunes rather than filters, so the walk never descends into it at all.
 
+`defaults.workers`, or `-workers`, sets how many directories are read at once.
+The default of 8 was measured rather than guessed: on a 12-CPU machine a full
+`c:/` scan took 8.9s at 4 workers, 6.3s at 8, and 6.0s at 16. Past 8 the work
+is waiting on the disk rather than the CPU.
+
 If the config sets a `method`, a bare `hecato` runs it. Comment that line out to
 get the examples back as the no-argument behaviour.
+
+## Performance
+
+A full `c:/` scan on the author's machine, 939,000 files:
+
+| | time | peak memory |
+|---|---|---|
+| `filepath.Walk`, serial | 85.8s | — |
+| `filepath.WalkDir` | 27.9s | 557.8 MB |
+| + worker pool, bounded results | 20.2s | — |
+| + ignore matcher rewrite | **5.6s** | **95.7 MB** |
+
+The memory drop is the bounded collector: hecato no longer holds 872,000 file
+records in order to report fifteen of them. Memory now scales with `-hits`
+rather than with the size of the volume.
 
 ## Credit
 
