@@ -39,7 +39,7 @@ The binary filename is load-bearing: `BINARY_NAME` in the Makefile must stay `he
 Three layers, and adding a capability touches all of them:
 
 - `cmd/hecato/main.go` — flag parsing plus a `switch *method` dispatch in `doWork()`. This switch is the only routing; there is no command registry.
-- `internal/files` — the analysis methods. `getFiles()` (unexported, `getFiles.go`) is the shared engine: one `filepath.Walk` returning a `*Result`.
+- `internal/files` — the analysis methods. `getFiles()` (unexported, `getFiles.go`) is the shared engine: one `filepath.WalkDir` returning a `*Result`.
 - `internal/config` — the optional YAML config; `internal/ignore` — the pattern matcher it feeds.
 - `internal/heclog`, `internal/examples`, `internal/version` — support packages.
 
@@ -53,7 +53,7 @@ Flag precedence is **explicit flag > config > built-in default**, implemented wi
 
 **Ignore patterns prune, they don't filter.** A pattern ending in `/` makes the walk return `filepath.SkipDir`, so an ignored tree is never descended into. That distinction is the whole point on a target like `c:/`. Patterns without a `/` match base names at any depth; patterns with one match the whole path. Matching is case-insensitive only on Windows, keyed off `runtime.GOOS`, which is the *build target* — a cross-compiled Linux binary correctly stays case-sensitive. The scan root itself is exempt from pruning, otherwise a pattern matching your target would silently return nothing.
 
-**Walk errors are values, not failures.** The `filepath.Walk` callback appends unreadable paths to `Result.Errors` and returns `nil` rather than aborting — deliberate, so a permission-denied directory doesn't kill a scan of `c:/`. Preserve this when touching the walk.
+**Walk errors are values, not failures.** The `filepath.WalkDir` callback appends unreadable paths to `Result.Errors` and returns `nil` rather than aborting — deliberate, so a permission-denied directory doesn't kill a scan of `c:/`. Preserve this when touching the walk.
 
 That convention has one sharp edge, which is why `checkTarget()` exists: a target that cannot be walked at all produces an empty result and no error, because the failure lands in `Result.Errors` like any other unreadable path. `main.go` therefore validates the target *before* the walk for any method in `walkingMethods`. Without that, a typo'd `-target` looks exactly like an empty disk.
 
@@ -88,12 +88,15 @@ Present in the code as written — don't treat them as bugs to fix unless asked,
 
 Planned work lives in the header comment block of `cmd/hecato/main.go`. Check there before proposing new methods or performance work.
 
-Two performance items in that list have measured numbers behind them, taken on `C:/Program Files` (68,361 files) on the author's machine, warm cache:
+### A note on benchmark numbers
 
-| | time | vs today |
+`filepath.Walk` was replaced by `filepath.WalkDir`. Worth recording what that taught us, because the remaining performance TODO carries a number from the same source:
+
+| | synthetic, warm cache | real `c:/` scan |
 |---|---|---|
-| `filepath.Walk` (today) | 3,619ms | — |
-| `filepath.WalkDir` | 549ms | 6.6x |
-| parallel, 8 workers | 102ms | 35x |
+| `filepath.Walk` → `WalkDir` | 6.6x predicted | **3.07x delivered** |
+| parallel, 8 workers | 5x predicted | not yet measured |
 
-The `WalkDir` win is largely Windows-specific: `FindNextFile` returns size and timestamps with the directory enumeration, so `DirEntry.Info()` is free. On Linux `getdents` does not, so `Info()` still costs an `lstat` and the released Linux binary will see less. Both figures are warm-cache; a cold run will be slower and the parallel gain smaller.
+The synthetic benchmark ran on `C:/Program Files` (68,361 files) with a hot file cache and overstated the real gain by more than double. A full-volume walk is far more I/O-bound, and no reduction in syscalls removes that. Treat the 5x figure for the worker pool as an upper bound, not a forecast.
+
+The `WalkDir` win is also largely Windows-specific: `FindNextFile` returns size and timestamps with the directory enumeration, so `DirEntry.Info()` is nearly free. On Linux `getdents` does not, so `Info()` still costs an `lstat` and the released Linux binary will see less.

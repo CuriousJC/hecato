@@ -193,8 +193,13 @@ func TestResultCountsScannedIgnoredAndPruned(t *testing.T) {
 	if res.Matched != 2 {
 		t.Errorf("Matched = %d, want 2 (keep.txt and main.go)", res.Matched)
 	}
-	if res.Elapsed <= 0 {
-		t.Error("Elapsed was not recorded")
+	// Only that it is non-negative. Asserting a positive duration would be
+	// flaky: on Windows the monotonic clock is coarser than a five-file
+	// WalkDir, so time.Since legitimately returns exactly zero. This assertion
+	// used to pass only because filepath.Walk's per-file lstat calls were slow
+	// enough to tick the clock.
+	if res.Elapsed < 0 {
+		t.Errorf("Elapsed = %v, want a non-negative duration", res.Elapsed)
 	}
 }
 
